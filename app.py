@@ -1,13 +1,24 @@
+import time
+import threading
+import random
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import random
+from flask_socketio import SocketIO, emit
+
+from solver import SlidingPuzzleAStar  # Your A* solver from earlier
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret!'
 CORS(app)
 
-# Global puzzle state and size (for simplicity)
-puzzle_state = []
-puzzle_size = 4  # default to 4x4
+# Initialize SocketIO (using eventlet or gevent as async_mode)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# Global puzzle data
+puzzle_state = []  # e.g., a list of length N*N
+puzzle_size = 4
+is_solving = False
+solver_thread = None
 
 def find_position(tile):
     """Return (row, col) of the given tile in puzzle_state, for the current puzzle_size."""
@@ -137,6 +148,105 @@ def new_puzzle():
     puzzle_state = generate_solvable_puzzle(puzzle_size)
 
     return jsonify({"size": puzzle_size, "puzzle": puzzle_state})
+
+# ----------------------------------------------------------------------
+# AUTO-SOLVE logic
+# ----------------------------------------------------------------------
+
+@app.route("/api/auto_solve", methods=["POST"])
+def auto_solve():
+    global is_solving, solver_thread
+    if not is_solving:
+        is_solving = True
+        solver_thread = threading.Thread(target=run_solver)
+        solver_thread.start()
+    return jsonify({"status": "solver_started"})
+
+@app.route("/api/stop_auto_solve", methods=["POST"])
+def stop_auto_solve():
+    global is_solving
+    is_solving = False
+    return jsonify({"status": "solver_stopped"})
+
+def run_solver():
+    """
+    Runs the solver in repeated 'chunks' until puzzle is solved or user stops.
+    Each iteration:
+      - Build A* from current puzzle_state
+      - Solve (partial or full)
+      - Step through the returned path, updating puzzle + sending events
+      - If partial, loop again from new state
+    """
+    global is_solving, puzzle_state
+
+    # print("Puzzle state: ", puzzle_state)
+
+    while is_solving:
+        # Snapshot the puzzle state at this moment
+        current_state = puzzle_state[:]
+        # Create A* solver (set expansions limit as desired)
+        
+        solver = SlidingPuzzleAStar(
+            initial_state=current_state,
+            size=puzzle_size,
+            max_expansions=50000
+        )
+        # Solve returns (path, solved)
+        path, solved = solver.solve()
+
+        print("Path: ", path)
+        print("Solved: ", solved)
+
+        # 'path' is a list of states from current_state -> best_node (partial or goal)
+        if len(path) <= 1:
+            # No progress possible? We'll break to avoid spinning endlessly
+            is_solving = False
+            socketio.emit("solver_complete", {"message": "No progress possible (partial or unsolvable)."})
+            break
+
+        print("Path: ", path)
+
+        # Step through the path, updating puzzle at each step
+        for idx, state in enumerate(path):
+            if not is_solving:
+                # user or other event asked us to stop
+                break
+
+            puzzle_state = list(state)  # update global puzzle
+
+            print("emitting solver update")
+
+            # Emit to client
+            socketio.emit("solver_update", {
+                "puzzle": puzzle_state,
+                "size": puzzle_size,
+                "step": idx,
+                "total_steps": len(path),
+                "solved": (idx == len(path) - 1 and solved),
+            })
+
+            # If this is the final step AND we found an actual solution
+            if idx == len(path) - 1 and solved:
+                is_solving = False
+                socketio.emit("solver_complete", {"message": "Puzzle solved!"})
+                break
+
+            # Sleep to visually show the move (0.25s)
+            time.sleep(0.25)
+
+        if not is_solving:
+            break
+
+        # If we finished stepping through path but didn't solve, that means
+        # 'path' was partial. Now puzzle_state = best node so far.
+        # We'll loop again, building a new solver from this partial state.
+
+        if solved:
+            # If we solved it, exit the outer while
+            break
+
+    # Make sure we mark solver as no longer running
+    is_solving = False
 
 if __name__ == "__main__":
     app.run(debug=True)

@@ -1,30 +1,97 @@
+// src/App.js
 import React, { useState, useEffect } from 'react';
+import io from 'socket.io-client';
 
 function App() {
-  // Keep track of the puzzle and the puzzle size
   const [puzzle, setPuzzle] = useState([]);
-  const [newBoardSize, setNewBoardSize] = useState(4);
   const [size, setSize] = useState(4);
+  const [newBoardSize, setNewBoardSize] = useState(4);
+  const [isSolving, setIsSolving] = useState(false);
+
   // const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
   const API_URL = 'http://127.0.0.1:5000';
+  // Connect to socket.io
+  const [socket, setSocket] = useState(null);
 
-  // Fetch current puzzle on mount
+  // On component mount, fetch initial puzzle + setup socket
   useEffect(() => {
+    // Fetch the puzzle
     fetchPuzzle();
-  }, []);
 
-  // Function to fetch the puzzle from backend
+    // Setup socket connection
+    const newSocket = io(API_URL);
+    setSocket(newSocket);
+
+    // Listen for solver updates
+    newSocket.on('solver_update', (data) => {
+      console.log('got solver update')
+      setPuzzle(data.puzzle);
+      setSize(data.size);
+
+      // if data.solved is true, the puzzle is done
+      if (data.solved) {
+        setIsSolving(false);
+      }
+    });
+
+    // Listen for solver complete
+    newSocket.on('solver_complete', (data) => {
+      // data.message might be "Puzzle solved!"
+      setIsSolving(false);
+    });
+
+    // Cleanup socket on unmount
+    return () => {
+      newSocket.close();
+    };
+  }, [API_URL]);
+
   const fetchPuzzle = () => {
     fetch(`${API_URL}/api/puzzle`)
-      .then((res) => res.json())
-      .then((data) => {
-        setSize(data.size);
+      .then(res => res.json())
+      .then(data => {
         setPuzzle(data.puzzle);
+        setSize(data.size);
       })
-      .catch((err) => console.error(err));
+      .catch(err => console.error(err));
   };
 
-  // Request a new puzzle of the given size
+  // Start auto-solve
+  const startAutoSolve = () => {
+    fetch(`${API_URL}/api/auto_solve`, { method: 'POST' })
+      .then(res => res.json())
+      .then(_ => {
+        setIsSolving(true);
+      })
+      .catch(err => console.error(err));
+  };
+
+  // Stop auto-solve
+  const stopAutoSolve = () => {
+    fetch(`${API_URL}/api/stop_auto_solve`, { method: 'POST' })
+      .then(res => res.json())
+      .then(_ => {
+        setIsSolving(false);
+      })
+      .catch(err => console.error(err));
+  };
+
+  // Attempt to move a tile (disabled while isSolving = true)
+  const handleTileClick = (tile) => {
+    if (isSolving || tile === 0) return;
+    fetch(`${API_URL}/api/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tile }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        setPuzzle(data.puzzle);
+        setSize(data.size);
+      })
+      .catch(err => console.error(err));
+  };
+
   const startNewPuzzle = () => {
     fetch(`${API_URL}/api/new`, {
       method: 'POST',
@@ -41,26 +108,9 @@ function App() {
         }
       })
       .catch((err) => console.error(err));
-  };
+  };  
 
-  // Attempt to move a tile
-  const handleTileClick = (tile) => {
-    fetch(`${API_URL}/api/move`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tile }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.puzzle) {
-          setSize(data.size);
-          setPuzzle(data.puzzle);
-        }
-      })
-      .catch((err) => console.error(err));
-  };
-
-  // Build a 2D array from the 1D puzzle array
+  // Build 2D grid
   const rows = [];
   for (let i = 0; i < size; i++) {
     rows.push(puzzle.slice(i * size, i * size + size));
@@ -80,11 +130,40 @@ function App() {
             style={{ marginLeft: '8px', width: '60px' }}
             min="2"
             max="50"
+            disabled={isSolving}
           />
         </label>
-        <button onClick={startNewPuzzle} style={styles.newPuzzleButton}>
+        <button 
+          onClick={startNewPuzzle} 
+          style={{
+            ...styles.newPuzzleButton,
+            opacity: isSolving ? 0.5 : 1,
+            cursor: isSolving ? 'not-allowed' : 'pointer'
+          }}
+          disabled={isSolving}
+        >
           New Puzzle
         </button>
+      </div>
+
+      <div style={{ marginBottom: '20px' }}>
+        {isSolving ? (
+          <button onClick={stopAutoSolve} style={styles.button}>
+            Stop Auto-Solve
+          </button>
+        ) : (
+          <button 
+            onClick={startAutoSolve} 
+            style={{
+              ...styles.button,
+              opacity: puzzle.length === 0 ? 0.5 : 1,
+              cursor: puzzle.length === 0 ? 'not-allowed' : 'pointer'
+            }}
+            disabled={puzzle.length === 0}
+          >
+            Auto-Solve
+          </button>
+        )}
       </div>
 
       <div style={styles.board}>
@@ -97,12 +176,11 @@ function App() {
                   key={`tile-${rowIndex}-${colIndex}`}
                   style={{
                     ...styles.tile,
-                    width: 40, // you can also scale by size if you want
-                    height: 40,
                     backgroundColor: isHole ? '#ccc' : '#69c',
-                    cursor: isHole ? 'default' : 'pointer',
+                    cursor: isSolving ? 'not-allowed'
+                                      : (isHole ? 'default' : 'pointer'),
                   }}
-                  onClick={() => !isHole && handleTileClick(tile)}
+                  onClick={() => handleTileClick(tile)}
                 >
                   {isHole ? '' : tile}
                 </div>
@@ -120,11 +198,11 @@ const styles = {
     textAlign: 'center',
     marginTop: '40px',
   },
-  newPuzzleButton: {
-    marginLeft: '16px',
+  button: {
     fontSize: '16px',
     padding: '8px 16px',
     cursor: 'pointer',
+    marginLeft: '10px'
   },
   board: {
     display: 'inline-block',
@@ -134,6 +212,8 @@ const styles = {
     display: 'flex',
   },
   tile: {
+    width: '40px',
+    height: '40px',
     margin: '2px',
     lineHeight: '40px',
     textAlign: 'center',

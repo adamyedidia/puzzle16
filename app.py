@@ -189,7 +189,7 @@ def run_solver():
         solver = SlidingPuzzleAStar(
             initial_state=current_state,
             size=puzzle_size,
-            max_expansions=50000
+            max_expansions=5000
         )
         # Solve returns (path, solved)
         path, solved = solver.solve()

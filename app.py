@@ -189,7 +189,7 @@ def run_solver():
         solver = SlidingPuzzleAStar(
             initial_state=current_state,
             size=puzzle_size,
-            max_expansions=5000
+            max_expansions=50000
         )
         # Solve returns (path, solved)
         path, solved = solver.solve()
@@ -198,11 +198,11 @@ def run_solver():
         print("Solved: ", solved)
 
         # 'path' is a list of states from current_state -> best_node (partial or goal)
-        if len(path) <= 1:
-            # No progress possible? We'll break to avoid spinning endlessly
-            is_solving = False
-            socketio.emit("solver_complete", {"message": "No progress possible (partial or unsolvable)."})
-            break
+        # if len(path) <= 1:
+        #     # No progress possible? We'll break to avoid spinning endlessly
+        #     is_solving = False
+        #     socketio.emit("solver_complete", {"message": "No progress possible (partial or unsolvable)."})
+        #     break
 
         print("Path: ", path)
 

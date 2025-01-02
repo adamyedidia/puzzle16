@@ -9,6 +9,8 @@ def state_to_str(state: Tuple[int]) -> str:
 def str_to_state(s: str) -> Tuple[int]:
     return tuple(map(int, s.split(",")))
 
+heuristic_cache = {}
+
 class SlidingPuzzleAStar:
     """
     A solver for an N x N sliding-tile puzzle using A* with summed Manhattan distance.
@@ -23,6 +25,16 @@ class SlidingPuzzleAStar:
         self.initial_state = tuple(initial_state)
         self.goal_state = tuple(range(1, size * size)) + (0,)
         self.max_expansions = max_expansions
+
+    def recompute_heuristic_for_state(self, state: Tuple[int]) -> None:
+        current_heuristic = self.heuristic(state)
+        min_neighbor_heuristic = min(self.heuristic(neighbor) for neighbor in self.get_neighbors(state))
+        # print(f"Current heuristic for {state}: {current_heuristic}, min neighbor heuristic: {min_neighbor_heuristic}")
+
+        if min_neighbor_heuristic >= current_heuristic:
+            # print(f"Updating heuristic for {state} from {current_heuristic} to {min_neighbor_heuristic + 1}")
+
+            heuristic_cache[state_to_str(state)] = min_neighbor_heuristic + 1
 
     def solve(self) -> Tuple[List[Tuple[int]], bool]:
         print(f"Starting A* for {self.size}x{self.size}, initial f = {self.heuristic(self.initial_state)}")
@@ -49,6 +61,8 @@ class SlidingPuzzleAStar:
         h_initial = self.heuristic(self.initial_state)
         best_h_node_so_far = (h_initial, 0, self.initial_state, None)
 
+        states_to_recompute = []
+
         while open_list:
             f_current, g_current, current_state, parent_state = heapq.heappop(open_list)
 
@@ -74,6 +88,13 @@ class SlidingPuzzleAStar:
                 # Option B: Return partial path that is best by h
                 partial_path = self._reconstruct_partial_path(best_h_node_so_far, came_from)
 
+                # # Recompute heuristic for states that have changed
+                # print("recomputing heuristic for states: ", states_to_recompute)
+
+                states_to_recompute_sorted_by_heuristic = sorted(states_to_recompute, key=lambda state: self.heuristic(state))
+                for state in states_to_recompute_sorted_by_heuristic:
+                    self.recompute_heuristic_for_state(state)
+
                 return partial_path, False
 
             expansions += 1
@@ -93,6 +114,7 @@ class SlidingPuzzleAStar:
                 if next_state not in g_scores or g_next < g_scores[next_state]:
                     g_scores[next_state] = g_next
                     f_next = g_next + self.heuristic(next_state)
+                    states_to_recompute.append(next_state)
                     heapq.heappush(open_list, (f_next, g_next, next_state, current_state))
 
         # If we exhaust open_list with no solution:
@@ -136,29 +158,13 @@ class SlidingPuzzleAStar:
 
         return neighbors
 
-    # This function can modify the heuristic cache in addition to performing lookup.
-    def consider_neighbors(self, state: Tuple[int], candidate_heuristic_val: int, depth: int) -> int:
-        # print(f"Considering neighbors of {state} with depth {depth}")
-        neighbor_to_val_dict = {}
-        for neighbor in self.get_neighbors(state):
-            neighbor_to_val_dict[neighbor] = self.heuristic(neighbor, depth - 1)
-
-        min_heuristic_val_across_neighbors = min(neighbor_to_val_dict.values())
-        if min_heuristic_val_across_neighbors > candidate_heuristic_val:
-            rset(state_to_str(state), min_heuristic_val_across_neighbors + 1)
-            for neighbor in self.get_neighbors(state):
-                if neighbor_to_val_dict[neighbor] == min_heuristic_val_across_neighbors:
-                    self.consider_neighbors(neighbor, min_heuristic_val_across_neighbors, depth)
-            return min_heuristic_val_across_neighbors + 1
-
-        return candidate_heuristic_val
-
     def heuristic(self, state: Tuple[int], depth: int = 1) -> int:
-        if (candidate_heuristic_val := rget_int(state_to_str(state))) is not None:
-            if depth > 0:
-                return self.consider_neighbors(state, candidate_heuristic_val, depth)
-            else:
-                return candidate_heuristic_val
+        # if (candidate_heuristic_val := rget_int(state_to_str(state))) is not None:
+        #     return candidate_heuristic_val
+
+        if state_to_str(state) in heuristic_cache:
+            # print(f"Cache hit for {state_to_str(state)}: {heuristic_cache[state_to_str(state)]}")
+            return heuristic_cache[state_to_str(state)]
 
         """
         Summed Manhattan distance of each tile from its goal position.
@@ -180,10 +186,8 @@ class SlidingPuzzleAStar:
 
         value_to_return = distance_sum
 
-        rset(state_to_str(state), value_to_return)
+        heuristic_cache[state_to_str(state)] = value_to_return
 
-        if depth > 0:
-            return self.consider_neighbors(state, value_to_return, depth)
         return value_to_return
 
     def _reconstruct_path(self, end_state: Tuple[int], came_from: dict) -> List[Tuple[int]]:

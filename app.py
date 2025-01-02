@@ -20,6 +20,9 @@ puzzle_size = 4
 is_solving = False
 solver_thread = None
 
+num_moves = 0
+thinking_time = 0.0
+
 def find_position(tile):
     """Return (row, col) of the given tile in puzzle_state, for the current puzzle_size."""
     idx = puzzle_state.index(tile)
@@ -113,6 +116,9 @@ def move_tile():
     tile_row, tile_col = find_position(tile_to_move)
     hole_row, hole_col = find_position(0)
 
+    global num_moves
+    num_moves += 1
+
     # Check adjacency (Manhattan distance == 1)
     if abs(tile_row - hole_row) + abs(tile_col - hole_col) == 1:
         # Swap the tile with the hole
@@ -121,7 +127,7 @@ def move_tile():
         puzzle_state[tile_idx], puzzle_state[hole_idx] = \
             puzzle_state[hole_idx], puzzle_state[tile_idx]
 
-    return jsonify({"size": puzzle_size, "puzzle": puzzle_state})
+    return jsonify({"size": puzzle_size, "puzzle": puzzle_state, "num_moves": num_moves})
 
 @app.route("/api/new", methods=["POST"])
 def new_puzzle():
@@ -133,6 +139,10 @@ def new_puzzle():
     global puzzle_state, puzzle_size
     data = request.get_json()
     new_size = data.get("size", 4)
+
+    global num_moves, thinking_time
+    num_moves = 0
+    thinking_time = 0.0
 
     # Validate puzzle size
     try:
@@ -156,9 +166,11 @@ def new_puzzle():
 @app.route("/api/auto_solve", methods=["POST"])
 def auto_solve():
     global is_solving, solver_thread
+    max_expansions = request.get_json().get('max_expansions', 50000)
+    use_heuristic_adjustment = request.get_json().get('use_heuristic_adjustment', False)
     if not is_solving:
         is_solving = True
-        solver_thread = threading.Thread(target=run_solver)
+        solver_thread = threading.Thread(target=run_solver, args=(max_expansions, use_heuristic_adjustment))
         solver_thread.start()
     return jsonify({"status": "solver_started"})
 
@@ -168,7 +180,44 @@ def stop_auto_solve():
     is_solving = False
     return jsonify({"status": "solver_stopped"})
 
-def run_solver():
+@app.route("/api/set_state", methods=["POST"])
+def set_state():
+    """
+    Set puzzle to a specific state.
+    Expects JSON: {"puzzle": [list of integers]}
+    Returns: {"size": <size>, "puzzle": <new_state>}
+    """
+    global puzzle_state, puzzle_size
+    data = request.get_json()
+    new_state = data.get("puzzle")
+
+    global num_moves, thinking_time
+    num_moves = 0
+    thinking_time = 0.0
+
+    # Validate input
+    try:
+        # Check that we got a list of integers
+        if not isinstance(new_state, list) or not all(isinstance(x, int) for x in new_state):
+            return jsonify({"error": "Invalid puzzle format - must be list of integers"}), 400
+
+        # Check length matches current size
+        if len(new_state) != puzzle_size * puzzle_size:
+            return jsonify({"error": f"Puzzle must be of length {puzzle_size * puzzle_size}"}), 400
+
+        # Check numbers are valid (0 to N²-1)
+        valid_numbers = set(range(puzzle_size * puzzle_size))
+        if set(new_state) != valid_numbers:
+            return jsonify({"error": f"Puzzle must contain exactly numbers 0 to {puzzle_size * puzzle_size - 1}"}), 400
+
+        # Update puzzle state
+        puzzle_state = new_state
+        return jsonify({"size": puzzle_size, "puzzle": puzzle_state})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400    
+
+def run_solver(max_expansions, use_heuristic_adjustment):
     """
     Runs the solver in repeated 'chunks' until puzzle is solved or user stops.
     Each iteration:
@@ -181,6 +230,8 @@ def run_solver():
 
     # print("Puzzle state: ", puzzle_state)
 
+    global num_moves, thinking_time
+
     while is_solving:
         # Snapshot the puzzle state at this moment
         current_state = puzzle_state[:]
@@ -189,20 +240,24 @@ def run_solver():
         solver = SlidingPuzzleAStar(
             initial_state=current_state,
             size=puzzle_size,
-            max_expansions=50000
+            max_expansions=max_expansions,
+            use_heuristic_adjustment=use_heuristic_adjustment
         )
         # Solve returns (path, solved)
+        start_time = time.time()
         path, solved = solver.solve()
+        end_time = time.time()
+        thinking_time += end_time - start_time
 
         print("Path: ", path)
         print("Solved: ", solved)
 
         # 'path' is a list of states from current_state -> best_node (partial or goal)
-        # if len(path) <= 1:
-        #     # No progress possible? We'll break to avoid spinning endlessly
-        #     is_solving = False
-        #     socketio.emit("solver_complete", {"message": "No progress possible (partial or unsolvable)."})
-        #     break
+        if len(path) <= 1 and not use_heuristic_adjustment:
+            # No progress possible? We'll break to avoid spinning endlessly
+            is_solving = False
+            socketio.emit("solver_complete", {"message": "No progress possible (partial or unsolvable)."})
+            break
 
         print("Path: ", path)
 
@@ -216,12 +271,16 @@ def run_solver():
 
             print("emitting solver update")
 
+            num_moves += 1
+
             # Emit to client
             socketio.emit("solver_update", {
                 "puzzle": puzzle_state,
                 "size": puzzle_size,
                 "step": idx,
                 "total_steps": len(path),
+                "num_moves": num_moves,
+                "thinking_time": thinking_time,
                 "solved": (idx == len(path) - 1 and solved),
             })
 

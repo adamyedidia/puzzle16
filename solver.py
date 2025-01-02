@@ -15,7 +15,7 @@ class SlidingPuzzleAStar:
     """
     A solver for an N x N sliding-tile puzzle using A* with summed Manhattan distance.
     """
-    def __init__(self, initial_state: List[int], size: int, max_expansions: int = 100000):
+    def __init__(self, initial_state: List[int], size: int, max_expansions: int = 100000, use_heuristic_adjustment: bool = False):
         """
         :param initial_state: Flattened puzzle as a list of length N*N, with `0` for the blank.
         :param size: N (e.g., 4 for a 4x4 puzzle).
@@ -24,6 +24,7 @@ class SlidingPuzzleAStar:
         self.size = size
         self.initial_state = tuple(initial_state)
         self.goal_state = tuple(range(1, size * size)) + (0,)
+        self.use_heuristic_adjustment = use_heuristic_adjustment
         self.max_expansions = max_expansions
 
     def recompute_heuristic_for_state(self, state: Tuple[int]) -> None:
@@ -92,8 +93,9 @@ class SlidingPuzzleAStar:
                 # print("recomputing heuristic for states: ", states_to_recompute)
 
                 states_to_recompute_sorted_by_heuristic = sorted(states_to_recompute, key=lambda state: self.heuristic(state))
-                for state in states_to_recompute_sorted_by_heuristic:
-                    self.recompute_heuristic_for_state(state)
+                if self.use_heuristic_adjustment:
+                    for state in states_to_recompute_sorted_by_heuristic:
+                        self.recompute_heuristic_for_state(state)
 
                 return partial_path, False
 
@@ -114,7 +116,10 @@ class SlidingPuzzleAStar:
                 if next_state not in g_scores or g_next < g_scores[next_state]:
                     g_scores[next_state] = g_next
                     f_next = g_next + self.heuristic(next_state)
-                    states_to_recompute.append(next_state)
+
+                    if self.use_heuristic_adjustment:
+                        states_to_recompute.append(next_state)
+
                     heapq.heappush(open_list, (f_next, g_next, next_state, current_state))
 
         # If we exhaust open_list with no solution:
@@ -162,7 +167,7 @@ class SlidingPuzzleAStar:
         # if (candidate_heuristic_val := rget_int(state_to_str(state))) is not None:
         #     return candidate_heuristic_val
 
-        if state_to_str(state) in heuristic_cache:
+        if self.use_heuristic_adjustment and state_to_str(state) in heuristic_cache:
             # print(f"Cache hit for {state_to_str(state)}: {heuristic_cache[state_to_str(state)]}")
             return heuristic_cache[state_to_str(state)]
 
@@ -186,7 +191,8 @@ class SlidingPuzzleAStar:
 
         value_to_return = distance_sum
 
-        heuristic_cache[state_to_str(state)] = value_to_return
+        if self.use_heuristic_adjustment:
+            heuristic_cache[state_to_str(state)] = value_to_return
 
         return value_to_return
 

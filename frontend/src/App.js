@@ -7,6 +7,12 @@ function App() {
   const [size, setSize] = useState(4);
   const [newBoardSize, setNewBoardSize] = useState(4);
   const [isSolving, setIsSolving] = useState(false);
+  const [numMoves, setNumMoves] = useState(0);
+  const [thinkingTime, setThinkingTime] = useState(0);
+
+  const [maxExpansions, setMaxExpansions] = useState(50000);
+  const [useHeuristicAdjustment, setUseHeuristicAdjustment] = useState(false);
+
 
   // const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
   const API_URL = 'http://127.0.0.1:5000';
@@ -16,6 +22,10 @@ function App() {
   // On component mount, fetch initial puzzle + setup socket
   useEffect(() => {
     // Fetch the puzzle
+    fetch(`${API_URL}/api/stop_auto_solve`, { method: 'POST' })
+    .then(res => res.json())
+    .catch(err => console.error('Error stopping auto-solve:', err));
+
     fetchPuzzle();
 
     // Setup socket connection
@@ -27,6 +37,8 @@ function App() {
       console.log('got solver update')
       setPuzzle(data.puzzle);
       setSize(data.size);
+      setNumMoves(data.num_moves);
+      setThinkingTime(data.thinking_time);
 
       // if data.solved is true, the puzzle is done
       if (data.solved) {
@@ -52,13 +64,22 @@ function App() {
       .then(data => {
         setPuzzle(data.puzzle);
         setSize(data.size);
+        setNumMoves(0);
+        setThinkingTime(0);
       })
       .catch(err => console.error(err));
   };
 
   // Start auto-solve
   const startAutoSolve = () => {
-    fetch(`${API_URL}/api/auto_solve`, { method: 'POST' })
+    fetch(`${API_URL}/api/auto_solve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_expansions: maxExpansions,
+        use_heuristic_adjustment: useHeuristicAdjustment
+      })
+    })
       .then(res => res.json())
       .then(_ => {
         setIsSolving(true);
@@ -88,6 +109,7 @@ function App() {
       .then(data => {
         setPuzzle(data.puzzle);
         setSize(data.size);
+        setNumMoves(data.num_moves);
       })
       .catch(err => console.error(err));
   };
@@ -147,6 +169,30 @@ function App() {
       </div>
 
       <div style={{ marginBottom: '20px' }}>
+        <label style={{ marginRight: '16px' }}>
+          Max Expansions:
+          <input
+            type="number"
+            value={maxExpansions}
+            onChange={(e) => setMaxExpansions(parseInt(e.target.value))}
+            style={{ marginLeft: '8px', width: '100px' }}
+            min="1000"
+            disabled={isSolving}
+          />
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={useHeuristicAdjustment}
+            onChange={(e) => setUseHeuristicAdjustment(e.target.checked)}
+            disabled={isSolving}
+          />
+          Use Heuristic Adjustment
+        </label>
+      </div>
+
+
+      <div style={{ marginBottom: '20px' }}>
         {isSolving ? (
           <button onClick={stopAutoSolve} style={styles.button}>
             Stop Auto-Solve
@@ -189,6 +235,65 @@ function App() {
           </div>
         ))}
       </div>
+      <br />
+      <div style={styles.puzzleState}>
+        Current State: 
+        <input 
+          type="text" 
+          value={puzzle.join(',')}
+          readOnly
+          style={styles.stateInput}
+          onClick={(e) => e.target.select()}
+        />
+      </div>
+      <div style={styles.puzzleState}>
+        Set New State: 
+        <input 
+          type="text" 
+          placeholder="Enter comma-separated numbers..."
+          style={styles.stateInput}
+          disabled={isSolving}
+        />
+        <button
+          onClick={() => {
+            const input = document.querySelector('input[placeholder="Enter comma-separated numbers..."]');
+            const newState = input.value.split(',').map(num => parseInt(num.trim()));
+            
+            fetch(`${API_URL}/api/set_state`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ puzzle: newState }),
+            })
+              .then(res => res.json())
+              .then(data => {
+                if (data.error) {
+                  alert(data.error);
+                } else {
+                  setPuzzle(data.puzzle);
+                  setSize(data.size);
+                }
+              })
+              .catch(err => {
+                console.error(err);
+                alert('Error setting puzzle state');
+              });
+          }}
+          style={{
+            ...styles.button,
+            opacity: isSolving ? 0.5 : 1,
+            cursor: isSolving ? 'not-allowed' : 'pointer'
+          }}
+          disabled={isSolving}
+        >
+          Set State
+        </button>
+      </div>      
+      <div style={styles.puzzleState}>
+        Moves: {numMoves}
+      </div>
+      <div style={styles.puzzleState}>
+        Thinking Time: {thinkingTime.toFixed(0)}s
+      </div>
     </div>
   );
 }
@@ -222,6 +327,12 @@ const styles = {
     borderRadius: '4px',
     userSelect: 'none',
   },
+  puzzleState: {
+    marginTop: '20px',
+    fontFamily: 'monospace',
+    fontSize: '14px',
+    color: '#666',
+  },  
 };
 
 export default App;
